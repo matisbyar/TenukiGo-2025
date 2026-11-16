@@ -20,7 +20,14 @@ function closeness(gap: number, rank: number): string {
   return "moins bon";
 }
 
-const signed = (n: number) => `${n >= 0 ? "+" : "−"}${decimal(Math.abs(n))}`;
+/** GoInsight returns raw Python errors: the known ones are reworded for the player. */
+function analysisError(e: unknown): string {
+  const message = messageOf(e);
+  if (/katago|returned non-zero exit status|Command '\[/i.test(message)) return "Le moteur d'analyse (KataGo) n'a pas pu démarrer sur le serveur.";
+  return message;
+}
+
+const signed =(n: number) => `${n >= 0 ? "+" : "−"}${decimal(Math.abs(n))}`;
 
 /**
  * Review of a game: board, evaluation and suggested moves for the current position.
@@ -83,7 +90,7 @@ export default function AnalysisView({
       api
         .analyzePosition(sgf, index)
         .then((moves) => setPositions((p) => ({ ...p, [index]: { status: "done", moves: Array.isArray(moves) ? moves : [] } })))
-        .catch((e) => setPositions((p) => ({ ...p, [index]: { status: "error", message: messageOf(e) } })));
+        .catch((e) => setPositions((p) => ({ ...p, [index]: { status: "error", message: analysisError(e) } })));
     }, 600);
     return () => clearTimeout(timer);
   }, [sgf, index, total]);
@@ -102,7 +109,7 @@ export default function AnalysisView({
     try {
       setWhole({ status: "idle", data: await api.analyzeGame(sgf) });
     } catch (e) {
-      setWhole({ status: "error", message: messageOf(e) });
+      setWhole({ status: "error", message: analysisError(e) });
     }
   };
 

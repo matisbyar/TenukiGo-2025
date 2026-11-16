@@ -58,7 +58,9 @@ function Control({ table }: { table: TableInfo }) {
       await (paused ? api.startAnalysis(stream.stream_id) : api.stopAnalysis(stream.stream_id));
       setPaused(!paused);
     } catch (e) {
-      setNotice({ type: "error", title: "Action impossible.", text: messageOf(e) });
+      // The backend forwards the raw network error when the analysis module is down.
+      const text = /Failed to (start|stop) stream analysis/i.test(messageOf(e)) ? "Le module d'analyse ne répond pas : la détection n'a pas pu être modifiée." : messageOf(e);
+      setNotice({ type: "error", title: "Action impossible.", text });
     } finally {
       setBusy(false);
     }
