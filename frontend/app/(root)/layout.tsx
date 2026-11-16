@@ -1,13 +1,13 @@
-import Navbar from "@/components/Navbar"
-import { ReactNode } from "react"
+import type { ReactNode } from "react";
+import SiteHeader, { MobileNav, SiteFooter } from "@/components/SiteHeader";
 
-const layout = ({ children } : { children: ReactNode }) => {
+export default function Layout({ children }: { children: ReactNode }) {
   return (
-    <div>
-        <Navbar />
-        {children}
+    <div className="flex min-h-screen flex-col">
+      <SiteHeader />
+      <div className="flex-auto">{children}</div>
+      <SiteFooter />
+      <MobileNav />
     </div>
-  )
+  );
 }
-
-export default layout

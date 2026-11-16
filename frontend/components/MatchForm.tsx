@@ -1,372 +1,170 @@
 "use client";
 
-import { useState, ChangeEvent, useRef, useEffect, use } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import FormField from "@/components/FormField";
-import FileInput from "@/components/FileInput";
+import { useState, type FormEvent } from "react";
+import { api, messageOf, useLoad, type MatchDetail, type Player } from "@/lib/api";
+import { RESULTS, STYLES, toDateInput, winnerOf } from "@/lib/format";
+import { parseSgf } from "@/lib/go";
+import PlayerSelect from "./PlayerSelect";
+import { Loaded, Notice } from "./ui";
 
-interface MatchFormProps {
-  mode: "create" | "edit";
-  initialData?: {
-    matchId: number;
-    title: string;
-    style?: string;
-    white?: number | string;
-    black?: number | string;
-    result?: string;
-    date?: string;
-    duration?: number;
-    description?: string;
-    thumbnail?: string;
-    sgf?: string;
-    videoUrl?: string;
-    videoId?: number | string | null;
-  };
+function initialResult(result: string | null | undefined) {
+  const w = winnerOf(result);
+  return w === "B" ? "black" : w === "W" ? "white" : w === "draw" ? "draw" : "unknown";
 }
 
-export default function MatchForm({ mode, initialData }: MatchFormProps) {
+/** Creates a match from an SGF file, or edits the information of an existing match. */
+export default function MatchForm({ match }: { match?: MatchDetail }) {
+  const players = useLoad(() => api.players(), []);
+  return <Loaded state={players}>{(list) => <Form match={match} initialPlayers={list} />}</Loaded>;
+}
+
+function Form({ match, initialPlayers }: { match?: MatchDetail; initialPlayers: Player[] }) {
   const router = useRouter();
-  const [password, setPassword] = useState("");
-  // ---------------------------------------------------------
-  // BASE TEXT FIELDS
-  // ---------------------------------------------------------
-  const [formData, setFormData] = useState({
-    title: initialData?.title || "",
-    style: initialData?.style || "",
-    white: initialData?.white?.toString() || "",
-    black: initialData?.black?.toString() || "",
-    result: initialData?.result || "",
-    date: initialData?.date || Date.now().toString(),
-    duration: initialData?.duration?.toString() || "",
-    description: initialData?.description || "",
-    video_id: initialData?.videoId?.toString() || "",
-  });
+  const editing = Boolean(match);
+  const [players, setPlayers] = useState(initialPlayers);
+  const [title, setTitle] = useState(match?.title ?? "");
+  const [black, setBlack] = useState<number | null>(match?.black ?? null);
+  const [white, setWhite] = useState<number | null>(match?.white ?? null);
+  const [result, setResult] = useState(initialResult(match?.result));
+  const [style, setStyle] = useState(match?.style || "amical");
+  const [date, setDate] = useState(toDateInput(match?.date) || toDateInput(new Date().toISOString()));
+  const [sgf, setSgf] = useState<{ name: string; text: string; moves: number } | null>(null);
+  const [submitted, setSubmitted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
-  // ---------------------------------------------------------
-  // FILE STATES
-  // ---------------------------------------------------------
-  const [video, setVideo] = useState({
-    file: null as File | null,
-    previewUrl: initialData?.videoUrl
-      ? `${process.env.NEXT_PUBLIC_UPLOADS_URL}${initialData.videoUrl}`
-      : "",
-    inputRef: useRef<HTMLInputElement>(null),
-  });
+  const addPlayer = (p: Player) => setPlayers((list) => [...list, p]);
+  const missingSgf = !editing && !sgf;
+  const invalid = !title.trim() || black === null || white === null || missingSgf;
 
-  const [sgf, setSgf] = useState({
-    file: null as File | null,
-    previewUrl: initialData?.sgf ? initialData.sgf : "",
-    inputRef: useRef<HTMLInputElement>(null),
-  });
-
-  // ---------------------------------------------------------
-  // REMOVE STATES
-  // ---------------------------------------------------------
-  const [removeVideo, setRemoveVideo] = useState(false);
-  const [removeSgf, setRemoveSgf] = useState(false);
-  // ---------------------------------------------------------
-  // SELECTION STATES
-  // ---------------------------------------------------------
-  const [selectExistingVideo, setSelectExistingVideo] = useState(false);
-
-  // ---------------------------------------------------------
-  // PLAYERS FETCH
-  // ---------------------------------------------------------
-  type PlayerOption = { label: string; value: string };
-  const [players, setPlayers] = useState<PlayerOption[]>([]);
-
-  useEffect(() => {
-    const fetchPlayers = async () => {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/players`);
-      const data = await response.json();
-      const playersData = data["players"];
-      const playersNames: PlayerOption[] = playersData.map((player: any) => ({
-        label: player["firstname"] + " " + player["lastname"],
-        value: player["player_id"].toString(),
-      }));
-      setPlayers(playersNames);
-    };
-    fetchPlayers();
-  }, []);
-
-  // ---------------------------------------------------------
-  // VIDEOS FETCH
-  // ---------------------------------------------------------
-  const [currentVideo, setCurrentVideo] = useState<string>(initialData?.videoId?.toString() || "");
-  type VideoOption = { label: string; value: string };
-  const [videos, setVideos] = useState<VideoOption[]>([]);
-  useEffect(() => {
-    const fetchVideos = async () => {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/videos`);
-      const data = await response.json();
-      const videosData = data["videos"];
-      const videoOptions: VideoOption[] = videosData.filter((video: any) => video.match_id === null).map((video: any) => ({
-        label: video["title"],
-        value: video["video_id"].toString(),
-      }));
-      setVideos(videoOptions);
-    };
-    fetchVideos();
-  }, []);
-
-  // ---------------------------------------------------------
-  // HANDLE INPUT
-  // ---------------------------------------------------------
-  const handleInputChange = (
-    e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
-  ) => {
-    const { id, value } = e.target;
-    setFormData((prev) => ({ ...prev, [id]: value }));
+  const readFile = async (file: File | undefined) => {
+    if (!file) return setSgf(null);
+    const text = await file.text();
+    const game = parseSgf(text);
+    setSgf({ name: file.name, text, moves: game.moves.length });
+    // Pre-fill the title and result from the file when they are still empty.
+    if (!title.trim()) setTitle(game.info.GN || file.name.replace(/\.sgf$/i, ""));
+    const fromFile = winnerOf(game.info.RE);
+    if (result === "unknown" && fromFile) setResult(initialResult(game.info.RE));
   };
 
-  const handleFileChange = (setter: Function, e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const previewUrl =
-      file.type.startsWith("video") || file.type.startsWith("image")
-        ? URL.createObjectURL(file)
-        : file.name;
-
-    setter((prev: any) => ({ ...prev, file, previewUrl }));
-  };
-
-  const handleResetFile = (state: any, setter: Function) => {
-    if (state.previewUrl && state.previewUrl.startsWith("blob:")) {
-      URL.revokeObjectURL(state.previewUrl);
-    }
-    setter((prev: any) => ({ ...prev, file: null, previewUrl: "" }));
-    state.inputRef.current && (state.inputRef.current.value = "");
-  };
-
-  // ---------------------------------------------------------
-  // SUBMIT
-  // ---------------------------------------------------------
-  const [error, setError] = useState<string | null>(null);
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
-    // Validate password
-    if (password !== process.env.NEXT_PUBLIC_PASSWORD) {
-      setError("Mot de passe incorrect.");
-      return;
+    setSubmitted(true);
+    if (invalid || black === null || white === null) return;
+    setBusy(true);
+    setError("");
+    const fields = { title: title.trim(), black, white, result, style, date: date ? `${date}T12:00:00` : undefined, sgf: sgf?.text };
+    try {
+      const id = match ? (await api.editMatch(match.match_id, fields)).match_id : (await api.createMatch(fields)).match_id;
+      router.push(`/match/${id}`);
+    } catch (err) {
+      setError(messageOf(err));
+      setBusy(false);
     }
-
-    // --------------------------------------------------
-    // CLIENT-SIDE VALIDATION (NEW)
-    // --------------------------------------------------
-    if (!formData.title || !formData.white || !formData.black || !formData.result) {
-      setError("Veuillez remplir tous les champs obligatoires (*)");
-      return;
-    }
-    if (formData.white === formData.black) {
-      setError("Les joueurs blanc et noir doivent être différents.");
-      return;
-    }
-    if (formData.duration <= "0") {
-      setError("La durée doit être un nombre positif.");
-      return;
-    }
-
-    const form = new FormData();
-
-    // base fields
-    Object.entries(formData).forEach(([key, value]) => {
-      if (value !== "") form.append(key, value);
-    });
-
-    // files
-    if (video.file) form.append("video", video.file);
-    if (sgf.file) form.append("sgf", sgf.file);
-
-    // removal flags
-    if (removeVideo) form.append("remove_video", "true");
-    if (removeSgf) form.append("remove_sgf", "true");
-
-    const url =
-      mode === "create"
-        ? `${process.env.NEXT_PUBLIC_API_URL}/match/create`
-        : `${process.env.NEXT_PUBLIC_API_URL}/match/${initialData?.matchId}/edit`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      body: form,
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      setError(data.error || "Échec de la soumission.");
-      return;
-    }
-
-    router.push(`/match/${data.match_id ?? initialData?.matchId}`);
   };
 
-  // ---------------------------------------------------------
-  // RENDER
-  // ---------------------------------------------------------
   return (
-    <form
-      onSubmit={handleSubmit}
-      className="rounded-20 shadow-10 gap-6 w-full flex flex-col px-5 py-7.5"
-    >
-      <p className="text-gray-600 text-sm">Les champs marqués d'un * sont obligatoires.</p>
-
-      <FormField id="title" label="Titre *" value={formData.title} onChange={handleInputChange} placeholder="Entrez le titre du match" />
-
-      <FormField
-        id="style"
-        label="Style"
-        as="select"
-        options={[
-          { label: "Selectionnez le style", value: "" },
-          { label: "Amical", value: "amical" },
-          { label: "Tournoi", value: "tournoi" },
-          { label: "Pédagogique", value: "pédagogique" },
-        ]}
-        value={formData.style}
-        onChange={handleInputChange}
-      />
-
-      <FormField
-        id="white"
-        label="Joueur (Blanc) *"
-        as="search"
-        options={players}
-        value={formData.white}
-        onChange={handleInputChange}
-        placeholder="nom et prénom"
-      />
-
-      <FormField
-        id="black"
-        label="Joueur (Noir) *"
-        as="search"
-        options={players}
-        value={formData.black}
-        onChange={handleInputChange}
-        placeholder="nom et prénom"
-      />
-
-      <FormField
-        id="result"
-        label="Résultat *"
-        as="select"
-        options={[
-          { label: "Selectionnez le résultat", value: "" },
-          { label: "Noir gagne", value: "Noir gagne" },
-          { label: "Blanc gagne", value: "Blanc gagne" },
-          { label: "Nul", value: "Nul" },
-          { label: "Abandon", value: "Abandon" },
-        ]}
-        value={formData.result}
-        onChange={handleInputChange}
-      />
-
-      <FormField id="date" label="Date" type="date" value={formData.date} onChange={handleInputChange} />
-
-      <FormField
-        id="duration"
-        label="Durée (min)"
-        type="number"
-        value={formData.duration}
-        onChange={handleInputChange}
-      />
-
-      <FormField
-        id="description"
-        label="Description"
-        as="textarea"
-        value={formData.description}
-        onChange={handleInputChange}
-        placeholder="décrivez le match..."
-      />
-
-      {/* CHECKBOXES */}
-      {mode === "edit" && (
-        <div className="flex flex-col gap-2 text-sm">
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={removeVideo} onChange={(e) => {
-              setRemoveVideo(e.target.checked); }} />
-            Supprimer la vidéo actuelle
+    <form onSubmit={submit} noValidate className="flex flex-col gap-5">
+      <section aria-labelledby="f-file" className="panel border-2 border-dashed !border-line-strong">
+        <h2 id="f-file" className="heading text-[22px]">
+          {editing ? "Remplacer le fichier SGF" : "Fichier SGF"}
+        </h2>
+        <p className="text-base text-pebble">
+          {editing ? "Facultatif : laissez vide pour garder le fichier actuel." : "Le fichier de la partie, exporté depuis un serveur de go ou un éditeur de kifu."}
+        </p>
+        <div className="flex flex-wrap items-center gap-3">
+          <label htmlFor="f-sgf" className="btn btn-primary !min-h-12 cursor-pointer">
+            Choisir un fichier
           </label>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={selectExistingVideo} onChange={(e) => {
-              setSelectExistingVideo(e.target.checked); }} />
-            Sélectionner une vidéo existante
-          </label>
+          <input id="f-sgf" type="file" accept=".sgf,application/x-go-sgf,text/plain" className="sr-only" onChange={(e) => readFile(e.target.files?.[0])} />
+          <span role="status" className="text-base">
+            {sgf ? (
+              <>
+                <strong>{sgf.name}</strong> · {sgf.moves} coups
+              </>
+            ) : (
+              <span className="text-pebble">Aucun fichier choisi</span>
+            )}
+          </span>
         </div>
-      )}
+        {submitted && missingSgf && <p className="field-error">Choisissez un fichier SGF.</p>}
+        {sgf && sgf.moves === 0 && <p className="field-error">Ce fichier ne contient aucun coup lisible.</p>}
+      </section>
 
-      {/* FILE INPUTS */}
-      {(!removeVideo && !selectExistingVideo) && (
-      <FileInput
-        id="video"
-        label="Vidéo"
-        accept="video/*"
-        file={video.file}
-        previewUrl={video.previewUrl}
-        inputRef={video.inputRef}
-        onChange={(e) => handleFileChange(setVideo, e)}
-        onReset={() => handleResetFile(video, setVideo)}
-        type="video"
-      />)}
-
-      {/* EXISTING VIDEO SELECTOR */}
-      {(selectExistingVideo || mode === "create") && (
-        <FormField
-          id="video_id"
-          label="Vidéo existante"
-          as="search"
-          options={videos}
-          value={formData.video_id}
-          onChange={handleInputChange}
-          placeholder={currentVideo ? `Mettez ${currentVideo} si vous voulez garder la vidéo actuelle` : "Sélectionnez une vidéo"}
-        />
-      )}
-      
-      {/* REMOVAL CHECKBOXE */}
-      {mode === "edit" && (
-        <div className="flex flex-col gap-2 text-sm">
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={removeSgf} onChange={(e) => {
-              setRemoveSgf(e.target.checked); }} />
-            Supprimer le fichier SGF actuel
+      <section aria-labelledby="f-info" className="panel !gap-4">
+        <h2 id="f-info" className="heading text-[22px]">
+          Informations
+        </h2>
+        <div className="field-group">
+          <label htmlFor="f-title" className="label">
+            Titre
           </label>
+          <input
+            id="f-title"
+            className="field"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            aria-invalid={(submitted && !title.trim()) || undefined}
+            placeholder="Partie du club, mardi"
+          />
+          {submitted && !title.trim() && <span className="field-error">À indiquer</span>}
         </div>
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))" }}>
+          <PlayerSelect id="f-black" label="Noir" color="B" players={players} value={black} onChange={setBlack} onCreated={addPlayer} invalid={submitted && black === null} />
+          <PlayerSelect id="f-white" label="Blanc" color="W" players={players} value={white} onChange={setWhite} onCreated={addPlayer} invalid={submitted && white === null} />
+        </div>
+        <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
+          <div className="field-group">
+            <label htmlFor="f-result" className="label">
+              Résultat
+            </label>
+            <select id="f-result" className="field pr-9" value={result} onChange={(e) => setResult(e.target.value)}>
+              {RESULTS.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field-group">
+            <label htmlFor="f-style" className="label">
+              Type de partie
+            </label>
+            <select id="f-style" className="field pr-9" value={style} onChange={(e) => setStyle(e.target.value)}>
+              {STYLES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+              {!STYLES.some((s) => s.value === style) && <option value={style}>{style}</option>}
+            </select>
+          </div>
+          <div className="field-group">
+            <label htmlFor="f-date" className="label">
+              Date
+            </label>
+            <input id="f-date" type="date" className="field" value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+        </div>
+      </section>
+
+      {error && (
+        <Notice type="error" title="Enregistrement impossible.">
+          {error}
+        </Notice>
       )}
 
-      {!removeSgf && (
-      <FileInput
-        id="sgf"
-        label="Fichier SGF"
-        accept=".sgf"
-        file={sgf.file}
-        previewUrl={sgf.previewUrl}
-        inputRef={sgf.inputRef}
-        onChange={(e) => handleFileChange(setSgf, e)}
-        onReset={() => handleResetFile(sgf, setSgf)}
-        type="sgf"
-      />)}
-
-      {/* Password */}
-      <div className="flex justify-center mt-4 gap-2">
-      <input
-        type="password"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        placeholder="Entrez le mot de passe"
-        className="border border-gray-300 rounded px-3 py-2 mt-2 w-50"
-      />
-      <button className="bg-yellow-500 text-white px-4 py-2 rounded-xl w-30 self-center">
-        {mode === "create" ? "Soumettre" : "Enregistrer"}
-      </button>
+      <div className="action-bar">
+        <Link href={match ? `/match/${match.match_id}` : "/matches"} className="link-strong">
+          Annuler
+        </Link>
+        <button type="submit" className="btn btn-primary text-[18px]" disabled={busy}>
+          {busy ? "Enregistrement…" : editing ? "Enregistrer les modifications" : "Importer la partie"}
+        </button>
       </div>
-
-      {error && <div className="error-field text-red-500">{error}</div>}
     </form>
   );
 }
-
-

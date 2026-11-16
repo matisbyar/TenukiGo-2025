@@ -1,40 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import VideoForm from "@/components/PlayerForm";
+import PlayerForm from "@/components/PlayerForm";
+import { Loaded, PageTitle } from "@/components/ui";
+import { api, useLoad } from "@/lib/api";
 
-type PlayerData = {
-    id: string;
-    firstname: string;
-    lastname: string;
-    level: string;
-} | null;
-
-export default function EditVideoPage() {
-  const { playerid } = useParams() as { playerid: string };
-  const [initialData, setInitialData] = useState<PlayerData>(null);
-
-  useEffect(() => {
-    const load = async () => {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/player/${playerid}`);
-      const data = await res.json();
-      setInitialData({
-        id: data.player_id,
-        firstname: data.firstname,
-        lastname: data.lastname,
-        level: data.level,
-      });
-    };
-    load();
-  }, [playerid]);
-
-  if (!initialData) return <p>Loading...</p>;
+export default function EditPlayerPage() {
+  const { playerid } = useParams<{ playerid: string }>();
+  const state = useLoad(() => api.player(playerid), [playerid]);
 
   return (
-    <div className="wrapper-md upload-page">
-      <h1>Modifiez le joueur</h1>
-      <VideoForm mode="edit" initialData={initialData} />
-    </div>
+    <main id="contenu" className="shell flex max-w-[860px] flex-col gap-6 pb-16 pt-1">
+      <PageTitle back={{ href: `/player/${playerid}`, label: "Retour au joueur" }} title="Modifier le joueur" />
+      <Loaded state={state}>{(player) => <PlayerForm player={player} />}</Loaded>
+    </main>
   );
 }

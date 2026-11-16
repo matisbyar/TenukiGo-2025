@@ -1,162 +1,143 @@
-'use client';
+"use client";
 
-import GoViewerLive from "@/components/go/GoViewerLive";
-import VideoPlayer from "@/components/VideoPlayer";
-import Link from "next/dist/client/link";
+import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import Goban from "@/components/Goban";
+import HlsPlayer from "@/components/HlsPlayer";
+import { DevBanner, Loaded, Stone } from "@/components/ui";
+import { useLoad } from "@/lib/api";
+import { clockTime } from "@/lib/format";
+import { colorName, pointName } from "@/lib/go";
+import { useLiveSgf } from "@/lib/live";
+import { loadTable, useSgf, type TableInfo } from "@/lib/matches";
 
-interface StreamDetails {
-    stream_id: string;
-    url: string;
-    title: string;
+export default function WatchPage() {
+  const { streamid } = useParams<{ streamid: string }>();
+  const state = useLoad(() => loadTable(streamid), [streamid]);
+
+  return (
+    <>
+      <DevBanner>La diffusion en direct est en cours de test.</DevBanner>
+      <main id="contenu" className="shell flex flex-col gap-[22px] pb-16 pt-8">
+        <Loaded state={state} label="Connexion à la table…">
+          {(table) => <Live table={table} />}
+        </Loaded>
+      </main>
+    </>
+  );
 }
 
-const Page = () => {
-    const [stream, setStream] = useState<StreamDetails | null>(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [match, setMatch] = useState<{id: string, title: string, date: string, black: string, white: string, style: string, description: string}>({id: "", title: "", date: "", black: "", white: "", style: "", description: ""});
-    const [whiteId, setWhiteId] = useState<string>("");
-    const [blackId, setBlackId] = useState<string>("");
-    const [sgfUrl, setSgfUrl] = useState<string>("");
-    const params = useParams()
-    const streamId = params.streamid
+function Live({ table }: { table: TableInfo }) {
+  const { stream } = table;
+  const live = useLiveSgf(stream.match_id, table.sgf);
+  const { game, boards } = useSgf(live.sgf);
+  const [latency, setLatency] = useState<number | null>(null);
+  const [announce, setAnnounce] = useState(true);
+  const [copied, setCopied] = useState(false);
 
-    useEffect(() => {
-        const fetchStreamData = async () => {
-            if (streamId) {
-                try {
-                    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/stream/${streamId}`);
-                    const data = await response.json();
-                    if (data) {
-                        setStream({
-                            stream_id: data.stream_id,
-                            url: data.url,
-                            title: data.title
-                        });
-                        // Fetch more match info if needed
-                        setMatch({
-                            id: data.match_id || "",
-                            title: data.title || "",
-                            date: data.date || Date.now().toString().slice(0,10),
-                            black: data.black || "",
-                            white: data.white || "",
-                            style: data.style || "",
-                            description: data.description || ""
-                        });
-                        setWhiteId(data.white_id || "");
-                        setBlackId(data.black_id || "");
-                    }
-                } catch (error) {
-                    console.error("Erreur lors de la récupération des données du stream:", error);
-                } finally {
-                    setIsLoading(false);
-                }
-            }
-        };
-        fetchStreamData();
-    }, [streamId]);
+  const total = game.moves.length;
+  const last = total > 0 ? game.moves[total - 1] : null;
+  const previous = game.moves
+    .map((move, i) => ({ move, number: i + 1 }))
+    .slice(Math.max(0, total - 4), Math.max(0, total - 1))
+    .reverse();
+  const started = stream.date ? new Date(stream.date) : null;
+  const lastText = last ? (last.pass ? `${colorName(last.color)} passe` : `${colorName(last.color)} joue ${pointName(last, game.size)}`) : "En attente du premier coup";
 
-    useEffect(() => {
-        if (!match.id) return;
-        const ws = new WebSocket(`${process.env.NEXT_PUBLIC_WS_URL}${match.id}`);
-        ws.onopen = () => {
-            console.log("Connecté au WebSocket du match");
-        };
-        ws.onmessage = (event) => {
-            try {
-                const message = JSON.parse(event.data);
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 4000);
+    } catch {
+      setCopied(false);
+    }
+  };
 
-                console.log("URL reçue:", message.data);
-                
-                // Add a timestamp to avoid caching issues
-                const timestamp = new Date().getTime();
-
-                setSgfUrl(`${process.env.NEXT_PUBLIC_STORAGE_URL}${message.data}?t=${timestamp}`); 
-                if (message.type === "sgf_final") {
-                    ws.close();
-                }
-            } catch (e) {
-                console.error("Erreur lors du parsing du message WebSocket:", e);
-            }
-        };
-        ws.onerror = (error) => {
-            console.error("Erreur WebSocket:", error);
-        };
-        return () => {
-            if (ws.readyState === 1) { // If the connection is open
-                ws.close();
-            }
-        };
-    }, [match.id]);
-
-    return (
-        <div className="grid grid-cols-1 md:grid-cols-10 gap-8 w-full max-w-7xl mx-auto p-4 md:items-center">
-            
-            {/* Conteneur Vidéo (70%) */}
-            <div className="md:col-span-7">
-                {isLoading ? (
-                    <div className="w-full aspect-video bg-black flex items-center justify-center text-white">
-                        Chargement du stream...
-                    </div>
-                ) : stream ? (
-                    <>
-                        <VideoPlayer url={stream.url} />
-                    </>
-                ) : (
-                    <div className="w-full aspect-video bg-gray-200 flex items-center justify-center">
-                        Stream introuvable
-                    </div>
-                )}
-            </div>
-
-            {/* Conteneur Go (30%) */}
-            <div className="md:col-span-3">
-                <GoViewerLive key={sgfUrl} sgfUrl={sgfUrl} />
-            </div>
-
-            {/* Match Info Section */}
-            <section className="flex flex-col md:col-span-10 gap-3 border border-gray-20 rounded-2xl shadow-10 p-4 bg-white">
-
-                <div className="flex justify-center">
-                    <h1 className="text-2xl font-bold text-dark-100">{match.title}</h1>
-                </div>
-
-                {match.style && (
-                <div className="flex justify-between items-center">
-                    <p className="font-semibold text-dark-100">Style:</p>
-                    <p>{match.style}</p>
-                </div>
-                )}
-
-                <div className="flex justify-between items-center">
-                <p className="font-semibold text-dark-100">Date:</p>
-                <p>{match.date ? match.date : "Inconnue"}</p>
-                </div>
-
-                <div className="flex justify-between items-center">
-                <p className="font-semibold text-dark-100">Joueur (blanc):</p>
-                <Link href={`/player/${whiteId}`}><p>
-                    {match.white}
-                </p></Link>
-                </div>
-
-                <div className="flex justify-between items-center">
-                <p className="font-semibold text-dark-100">Joueur (Noir):</p>
-                <Link href={`/player/${blackId}`}><p>
-                    {match.black}
-                </p></Link>
-                </div>
-
-                {match.description && (
-                <div className="flex justify-between items-center border-t border-gray-20 pt-3 mt-2">
-                    <p className="font-semibold text-dark-100 mb-1">Description:</p>
-                    <p className="text-sm text-gray-100 leading-relaxed">{match.description}</p>
-                </div>
-                )}
-            </section>
+  return (
+    <>
+      <section aria-labelledby="v-title" className="flex flex-wrap items-center justify-between gap-5 rounded-[28px] border border-line bg-white px-6 py-5">
+        <div className="min-w-0">
+          <p className="flex flex-wrap items-center gap-2.5">
+            {live.ended ? <span className="pill pill-neutral">Partie terminée</span> : <span className="live-badge">EN DIRECT</span>}
+            {latency !== null && !live.ended && <span className="text-[15px] text-pebble">environ {Math.max(1, Math.round(latency))} secondes de décalage</span>}
+          </p>
+          <h1 id="v-title" className="heading mb-1.5 mt-2 text-[clamp(24px,4.5vw,30px)]">
+            {stream.title ?? "Partie en direct"}
+          </h1>
+          <p className="flex flex-wrap gap-x-[18px] gap-y-1 text-base">
+            <span className="inline-flex items-center gap-2">
+              <Stone color="B" />
+              {stream.black_id ? <Link href={`/player/${stream.black_id}`}>{stream.black}</Link> : "Joueur inconnu"}
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <Stone color="W" />
+              {stream.white_id ? <Link href={`/player/${stream.white_id}`}>{stream.white}</Link> : "Joueur inconnu"}
+            </span>
+            <span className="text-pebble">{[stream.style, started && `depuis ${clockTime(started)}`].filter(Boolean).join(" · ")}</span>
+          </p>
         </div>
-    );
-}
+        <div className="flex flex-col items-start gap-2 sm:items-end">
+          <button type="button" className="btn btn-outline !min-h-12 !px-[18px]" onClick={copyLink}>
+            Copier le lien pour OBS ou Twitch
+          </button>
+          <span role="status" className="text-[15px] font-bold text-jade">
+            {copied && "✓ Lien copié"}
+          </span>
+          <Link href="/watch" className="link-strong">
+            Autre table en direct
+          </Link>
+        </div>
+      </section>
 
-export default Page
+      <div className="flex flex-wrap items-start gap-[22px]">
+        <section aria-labelledby="v-video" className="min-w-0 flex-[1_1_520px]">
+          <h2 id="v-video" className="sr-only">
+            Vidéo
+          </h2>
+          <HlsPlayer url={stream.url} label={`Vidéo de la table : ${stream.title ?? "partie en direct"}`} onLatency={setLatency} />
+        </section>
+
+        <section aria-labelledby="v-board" className="panel min-w-0 flex-[1_1_400px] !p-[18px]">
+          <h2 id="v-board" className="sr-only">
+            Goban synchronisé
+          </h2>
+          <Goban
+            board={boards[total]}
+            lastMove={last && !last.pass ? last : null}
+            label={`Goban synchronisé avec la vidéo. ${last ? `Dernier coup : ${lastText}.` : "Aucun coup joué pour le moment."}`}
+          />
+          <div role="log" aria-live={announce ? "polite" : "off"} className="flex items-center gap-3.5 rounded-[20px] bg-ink p-3.5 text-white">
+            <svg width={36} height={36} viewBox="0 0 36 36" aria-hidden="true" className="flex-none">
+              <circle cx={18} cy={18} r={16} fill={last?.color === "B" ? "#1B1A17" : "#FFFFFF"} stroke="#E8A317" strokeWidth={3} />
+            </svg>
+            <p>
+              <span className="block text-sm text-[#D9D2C3]">{last ? `Coup ${total}` : "Début de partie"}</span>
+              <strong className="text-[22px]">{lastText}</strong>
+            </p>
+          </div>
+          {previous.length > 0 && (
+            <ol reversed aria-label="Coups précédents" className="flex list-none flex-wrap gap-2">
+              {previous.map(({ move, number }) => (
+                <li key={number} className="inline-flex items-center gap-2 rounded-full border border-line py-1 pl-1 pr-3 text-[15px]">
+                  <Stone color={move.color} size={22} />
+                  {number} · <strong className="font-mono">{move.pass ? "passe" : pointName(move, game.size)}</strong>
+                </li>
+              ))}
+            </ol>
+          )}
+          <label className="flex min-h-11 items-center gap-2.5 border-t border-line pt-1.5 text-base">
+            <input type="checkbox" className="checkbox" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
+            Annoncer chaque coup aux lecteurs d&apos;écran
+          </label>
+          {live.dropped && !live.ended && (
+            <p role="status" className="text-[15px] text-pebble">
+              Connexion au direct interrompue : rechargez la page pour suivre les nouveaux coups.
+            </p>
+          )}
+        </section>
+      </div>
+    </>
+  );
+}

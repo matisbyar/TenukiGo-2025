@@ -2,43 +2,17 @@
 
 import { useParams } from "next/navigation";
 import MatchForm from "@/components/MatchForm";
-import { useState, useEffect } from "react";
+import { Loaded, PageTitle } from "@/components/ui";
+import { api, useLoad } from "@/lib/api";
 
-export default function Page() {
-  const { matchid } = useParams();
-  const [initialData, setInitialData] = useState<any | null>(null);
-  // Fetch initial data for the match
-  useEffect(() => {
-    async function fetchMatchData() {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/match/${matchid}`);
-      const data = await res.json();
-      setInitialData({
-        matchId: data.match_id,
-        title: data.title,
-        style: data.style,
-        white: data.white,
-        black: data.black,
-        result: data.result,
-        duration: data.duration,
-        description: data.description,
-        date: data.date,
-        thumbnail: data.thumbnail,
-        sgf: data.sgf,
-        videoPath: data.video,
-        videoId: data.video_id,
-      });
-    }
-    fetchMatchData();
-  }, [matchid]);
-
-  if (!initialData) {
-    return <div>Loading...</div>;
-  }
+export default function EditMatchPage() {
+  const { matchid } = useParams<{ matchid: string }>();
+  const state = useLoad(() => api.match(matchid), [matchid]);
 
   return (
-    <div className="wrapper-md upload-page">
-      <h1>Modifiez la partie</h1>
-      <MatchForm mode="edit" initialData={initialData} />
-    </div>
+    <main id="contenu" className="shell flex max-w-[860px] flex-col gap-6 pb-16 pt-1">
+      <PageTitle back={{ href: `/match/${matchid}`, label: "Retour à la partie" }} title="Modifier les informations" />
+      <Loaded state={state}>{(match) => <MatchForm match={match} />}</Loaded>
+    </main>
   );
 }

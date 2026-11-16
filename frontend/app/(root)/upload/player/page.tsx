@@ -1,15 +1,13 @@
-'use client';
+"use client";
 
-import PlayerForm from '@/components/PlayerForm';
+import PlayerForm from "@/components/PlayerForm";
+import { PageTitle } from "@/components/ui";
 
-const Page = () => {
-
-    return (
-        <div className="wrapper-md upload-page">
-            <h1>Ajouter un Joueur</h1>
-            <PlayerForm mode="create" />
-        </div>
-    )
+export default function NewPlayerPage() {
+  return (
+    <main id="contenu" className="shell flex max-w-[860px] flex-col gap-6 pb-16 pt-1">
+      <PageTitle back={{ href: "/players", label: "Joueurs" }} title="Ajouter un joueur" />
+      <PlayerForm />
+    </main>
+  );
 }
-
-export default Page;

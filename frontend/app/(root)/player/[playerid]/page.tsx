@@ -1,130 +1,164 @@
-"use client"
+"use client";
 
-import Link from "next/link"
-import MatchCard from "@/components/MatchCard"
-import { useEffect, useState } from "react"
-import { useParams } from "next/dist/client/components/navigation"
-import DeletePopUp from "@/components/DeletePopUp"
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { BackLink, Loaded, Stone } from "@/components/ui";
+import { api, useLoad, type MatchSummary, type PlayerProfile } from "@/lib/api";
+import { initials, playerName, shortDate, winnerOf } from "@/lib/format";
+import type { Color } from "@/lib/go";
 
-interface PlayerDetails {
-  firstName: string
-  lastName: string
-  level: string
-  matchesPlayed: number
-  wins: number
-  matches: string[] | number[]
+interface PlayedMatch {
+  match: MatchSummary;
+  color: Color;
+  opponent: string;
+  outcome: "win" | "loss" | "draw" | null;
 }
 
-export default function PlayerDetailsPage() {
-  // Mock data for demonstration — replace with fetched data later
-  const playerex: PlayerDetails = {
-    firstName: "Emma",
-    lastName: "Smith",
-    level: "Pro",
-    matchesPlayed: 12,
-    wins: 8,
-    matches: []
-  }
+/** GET /player/{id} gives match ids, GET /matches gives their details: both are joined here. */
+function playedMatches(player: PlayerProfile, matches: MatchSummary[]): PlayedMatch[] {
+  const name = playerName(player);
+  return matches
+    .filter((m) => player.matches.includes(m.match_id))
+    .map((match) => {
+      // Names are the only link in GET /matches; a player facing a namesake is counted as Black.
+      const color: Color = match.black === name ? "B" : "W";
+      const winner = winnerOf(match.result);
+      const outcome = winner === null ? null : winner === "draw" ? "draw" : winner === color ? "win" : "loss";
+      return { match, color, opponent: (color === "B" ? match.white : match.black) ?? "joueur inconnu", outcome };
+    });
+}
 
-  const [player, setPlayer] = useState<PlayerDetails>(playerex);
-  const params = useParams();
-  const playerId = params.playerid;
-  // Fetch player data by ID
-  useEffect(() => {
-    const fetchPlayerData = async () => {
-      if (playerId) {
-        const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/player/${playerId}`);
-        const data = await response.json();
-        // Process and set the player data here
-        setPlayer({
-          firstName: data["firstname"],
-          lastName: data["lastname"],
-          level: data["level"],
-          matchesPlayed: data["count_matches"],
-          wins: data["wins"],
-          matches: data["matches"],
-        });
-      }
-    };
-    fetchPlayerData();
-  }, [playerId]);
-
-  // fetching match info for each match id in player.matches
-  const fetchMatchInfo = async (matchId: string | number) => {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/match/${matchId}`);
-    const data = await response.json();
-    return {
-      id: matchId,
-      title: data["title"],
-      duration: data["duration"],
-      date: data["date"],
-      thumbnail: data["thumbnail"],
-    };
-  };
-  const [matchInfos, setMatchInfos] = useState<MatchCardProps[]>([]);
-  useEffect(() => {
-    const loadMatches = async () => {
-      const infos = await Promise.all(
-        player.matches.map((matchId) => fetchMatchInfo(matchId))
-      );
-      setMatchInfos(infos);
-    };
-    loadMatches();
-  }, [player.matches]);
+export default function PlayerPage() {
+  const { playerid } = useParams<{ playerid: string }>();
+  const state = useLoad(async () => {
+    const [player, matches] = await Promise.all([api.player(playerid), api.matches().catch(() => [])]);
+    return { player, played: playedMatches(player, matches) };
+  }, [playerid]);
 
   return (
-    <main className="wrapper page flex flex-col gap-6 py-8">
-      <div className="flex items-center justify-between">
-      {/* Player Name */}
-      <h1 className="text-2xl font-bold text-dark-100">
-        {player.firstName} {player.lastName}
-      </h1>
-
-      <div className="flex justify-end gap-2"> 
-        <Link href={`/player/${playerId}/edit`}>
-          <img src="/assets/icons/edit.png" className="w-6 h-6 cursor-pointer left" />
-        </Link>
-        <DeletePopUp mode="player" id={playerId?.toString()} />
+    <main id="contenu" className="shell flex flex-col gap-3 pb-16 pt-1">
+      <div>
+        <BackLink href="/players">Joueurs</BackLink>
       </div>
-      </div>
-
-      {/* Player Summary Card */}
-      <section className="flex flex-col gap-3 border border-gray-20 rounded-2xl shadow-10 p-4 bg-white">
-        <div className="flex justify-between items-center">
-          <p className="font-semibold text-dark-100">Niveau:</p>
-          <p>{player.level}</p>
-        </div>
-
-        <div className="flex justify-between items-center">
-          <p className="font-semibold text-dark-100">Parties jouées:</p>
-          <p>{player.matchesPlayed}</p>
-        </div>
-
-        <div className="flex justify-between items-center">
-          <p className="font-semibold text-dark-100">Victoires:</p>
-          <p className="font-bold text-green-600">{player.wins}</p>
-        </div>
-      </section>
-
-      {/* Matches List */}
-      <section className="flex flex-col gap-4">
-        <h2 className="text-xl font-semibold text-dark-100 mb-2">Parties jouées :</h2>
-
-        {matchInfos.length > 0 ? (
-          matchInfos.map((matchinfo) => (
-            <MatchCard
-              key={matchinfo.id}
-              id={matchinfo.id}
-              title={matchinfo.title}
-              duration={matchinfo.duration}
-              date={matchinfo.date}
-              thumbnail={matchinfo.thumbnail}
-            />
-          ))
-        ) : (
-          <p className="text-gray-100 text-sm">Pas de parties.</p>
-        )}
-      </section>
+      <Loaded state={state} label="Chargement du joueur…">
+        {({ player, played }) => <Profile player={player} played={played} />}
+      </Loaded>
     </main>
-  )
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <dt className="text-sm text-ink-soft">{label}</dt>
+      <dd className="mt-0.5 text-[28px] font-extrabold">{value}</dd>
+    </div>
+  );
+}
+
+function Profile({ player, played }: { player: PlayerProfile; played: PlayedMatch[] }) {
+  const name = playerName(player);
+  const decided = played.filter((p) => p.outcome === "win" || p.outcome === "loss");
+  const wins = decided.filter((p) => p.outcome === "win").length;
+  const losses = decided.length - wins;
+  const rate = decided.length > 0 ? Math.round((wins / decided.length) * 100) : null;
+  const byColor = (color: Color) => {
+    const games = decided.filter((p) => p.color === color);
+    const won = games.filter((p) => p.outcome === "win").length;
+    return `${won} victoire${won > 1 ? "s" : ""} sur ${games.length}`;
+  };
+
+  return (
+    <>
+      <section aria-labelledby="pl-name" className="banner flex flex-wrap items-center justify-between gap-7">
+        <div className="flex items-center gap-[18px]">
+          <span aria-hidden="true" className="flex size-[76px] flex-none items-center justify-center rounded-full bg-amber text-[28px] font-extrabold">
+            {initials(name)}
+          </span>
+          <div>
+            <h1 id="pl-name" className="heading text-[34px]">
+              {name}
+            </h1>
+            <p className="mt-1 text-ink-soft">{player.level || "Niveau non renseigné"}</p>
+          </div>
+        </div>
+        <dl className="flex flex-wrap gap-8">
+          <Stat label="Parties" value={player.count_matches} />
+          <Stat label="Victoires" value={wins} />
+          <Stat label="Défaites" value={losses} />
+        </dl>
+      </section>
+
+      <div className="mt-2.5 flex flex-wrap items-start gap-[22px]">
+        <section aria-labelledby="pl-matches" className="panel min-w-0 flex-[999_1_560px] !gap-3">
+          <h2 id="pl-matches" className="heading text-[20px]">
+            Dernières parties
+          </h2>
+          {played.length === 0 ? (
+            <p className="text-pebble">Ce joueur n&apos;a pas encore de partie enregistrée.</p>
+          ) : (
+            <ul className="flex list-none flex-col gap-2.5">
+              {played.map(({ match, color, opponent, outcome }) => (
+                <li key={match.match_id}>
+                  <Link href={`/match/${match.match_id}`} className="flex flex-wrap items-center gap-3.5 rounded-[20px] border border-line px-3.5 py-3 text-ink no-underline hover:text-ink">
+                    <Stone color={color} size={22} />
+                    <span className="flex-[1_1_200px]">
+                      <strong>{match.title}</strong>
+                      <br />
+                      <span className="text-[15px] text-pebble">
+                        {color === "B" ? "Noir" : "Blanc"} contre {opponent} · {shortDate(match.date)}
+                      </span>
+                    </span>
+                    {outcome === "win" && <span className="pill pill-outline-jade">Victoire</span>}
+                    {outcome === "loss" && <span className="pill pill-outline-gray">Défaite</span>}
+                    {outcome === "draw" && <span className="pill pill-outline-gray">Nulle</span>}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section aria-labelledby="pl-summary" className="panel flex-[1_1_300px]">
+          <h2 id="pl-summary" className="heading text-[20px]">
+            Bilan
+          </h2>
+          {rate === null ? (
+            <p className="text-pebble">Pas encore de partie avec un résultat.</p>
+          ) : (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <p className="text-base">
+                  <strong>{rate} %</strong> de victoires
+                </p>
+                <div aria-hidden="true" className="flex h-3.5 overflow-hidden rounded-[7px] border-[1.5px] border-ink">
+                  <span className="bg-jade" style={{ width: `${rate}%` }} />
+                  <span className="bg-white" style={{ width: `${100 - rate}%` }} />
+                </div>
+              </div>
+              <ul className="flex list-none flex-col gap-2 text-base">
+                <li className="flex justify-between gap-3">
+                  <span className="inline-flex items-center gap-2">
+                    <Stone color="B" size={14} />
+                    Avec Noir
+                  </span>
+                  <span>{byColor("B")}</span>
+                </li>
+                <li className="flex justify-between gap-3">
+                  <span className="inline-flex items-center gap-2">
+                    <Stone color="W" size={14} />
+                    Avec Blanc
+                  </span>
+                  <span>{byColor("W")}</span>
+                </li>
+              </ul>
+            </>
+          )}
+          <Link href={`/player/${player.player_id}/edit`} className="link-strong">
+            Modifier le joueur
+          </Link>
+        </section>
+      </div>
+    </>
+  );
 }
